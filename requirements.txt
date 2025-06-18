@@ -1,0 +1,7 @@
+piper-phonemize-cross~=1.2.1
+onnxruntime>=1.11.0,<2
+
+numpy~=2.3.0
+Flask~=3.1.1
+setuptools~=80.9.0
+certifi~=2025.6.15
