@@ -3,13 +3,16 @@ import argparse
 import io
 import logging
 import wave
+import os
 from pathlib import Path
 from typing import Any, Dict
+from datetime import datetime
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file, url_for
 import json
 
 from .placeholder_stretcher import PlaceholderStretcher
+from .file_storage import FileStorage
 from . import PiperVoice
 from .download import ensure_voice_exists, find_voice, get_voices
 
@@ -67,6 +70,19 @@ def main() -> None:
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to console"
     )
+    parser.add_argument(
+        "--storage-dir", 
+        "--storage_dir",
+        default="./audio_storage", 
+        help="Directory to store processed audio files"
+    )
+    parser.add_argument(
+        "--file-expiry",
+        "--file_expiry",
+        type=int,
+        default=20,
+        help="Minutes after which files are automatically deleted"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
     _LOGGER.debug(args)
@@ -103,6 +119,15 @@ def main() -> None:
 
     # Create web server
     app = Flask(__name__)
+    
+    # Initialize file storage
+    storage_dir = os.path.abspath(args.storage_dir)
+    file_storage = FileStorage(
+        storage_dir=storage_dir,
+        expiry_minutes=args.file_expiry,
+        base_url=""
+    )
+    _LOGGER.info(f"File storage initialized at {storage_dir} with {args.file_expiry}min expiry")
 
     @app.route("/", methods=["GET", "POST"])
     async def app_synthesize() -> bytes:
@@ -194,14 +219,71 @@ def main() -> None:
                 audio_format=audio_file.filename.split('.')[-1].lower()
             )
 
-            # Return the processed audio
-            return result_audio, 200, {
-                'Content-Type': 'audio/wav',
-                'Content-Disposition': 'attachment; filename=processed.wav'
-            }
+            # Check if the client wants JSON response or direct file download
+            if request.args.get('format') == 'json':
+                # Save the processed audio file and get a URL
+                file_id = file_storage.save_file(result_audio)
+                file_url = request.host_url.rstrip('/') + url_for('serve_file', file_id=file_id)
+
+                # Return both the file URL and the raw audio
+                response_data = {
+                    "file_id": file_id,
+                    "file_url": file_url,
+                    "expires_at": datetime.now().timestamp() + (args.file_expiry * 60)
+                }
+
+                return jsonify(response_data)
+            else:
+                # Return the processed audio directly
+                return result_audio, 200, {
+                    'Content-Type': 'audio/wav',
+                    'Content-Disposition': 'attachment; filename=processed.wav'
+                }
 
         except Exception as e:
             _LOGGER.exception("Error processing placeholders")
+            return jsonify({"error": str(e)}), 500
+            
+    @app.route("/file/<file_id>", methods=["GET"])
+    def serve_file(file_id):
+        """Serve a processed audio file by ID."""
+        try:
+            file_path = file_storage.get_file_path(file_id)
+            if file_path is None:
+                return jsonify({"error": "File not found"}), 404
+                
+            return send_file(
+                file_path,
+                mimetype="audio/wav",
+                as_attachment=request.args.get('download') == 'true',
+                download_name=f"audio_{file_id}"
+            )
+        except Exception as e:
+            _LOGGER.exception(f"Error serving file {file_id}")
+            return jsonify({"error": str(e)}), 500
+            
+    @app.route("/file/<file_id>/info", methods=["GET"])
+    def get_file_info(file_id):
+        """Get information about a file."""
+        try:
+            file_path = file_storage.get_file_path(file_id)
+            if file_path is None:
+                return jsonify({"error": "File not found"}), 404
+                
+            # Get file info
+            file_stats = os.stat(file_path)
+            creation_time = file_stats.st_ctime
+            expiry_time = creation_time + (args.file_expiry * 60)
+            
+            return jsonify({
+                "file_id": file_id,
+                "created_at": creation_time,
+                "expires_at": expiry_time,
+                "size_bytes": file_stats.st_size,
+                "file_url": request.host_url.rstrip('/') + url_for('serve_file', file_id=file_id)
+            })
+        except Exception as e:
+            _LOGGER.exception(f"Error getting file info for {file_id}")
             return jsonify({"error": str(e)}), 500
 
     app.run(host=args.host, port=args.port)

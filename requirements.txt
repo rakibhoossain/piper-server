@@ -7,3 +7,4 @@ setuptools~=80.9.0
 certifi~=2025.6.15
 pydub~=0.25.1
 soundfile~=0.12.1
+schedule~=1.2.2
