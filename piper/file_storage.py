@@ -6,7 +6,42 @@ from datetime import datetime, timedelta
 import logging
 import uuid
 import threading
-import schedule
+try:
+    import schedule
+except ImportError:
+    # If schedule is not installed, implement a simple scheduler
+    class SimpleScheduler:
+        def __init__(self):
+            self.tasks = []
+            
+        def every(self, interval):
+            return TaskScheduler(interval, self)
+            
+        def run_pending(self):
+            current_time = time.time()
+            for task in self.tasks:
+                if task['last_run'] + task['interval'] <= current_time:
+                    task['job']() 
+                    task['last_run'] = current_time
+    
+    class TaskScheduler:
+        def __init__(self, interval, scheduler):
+            self.interval = interval
+            self.scheduler = scheduler
+            
+        def minutes(self):
+            self.interval_seconds = self.interval * 60
+            return self
+            
+        def do(self, job):
+            self.scheduler.tasks.append({
+                'interval': self.interval_seconds,
+                'job': job,
+                'last_run': time.time()
+            })
+            return job
+    
+    schedule = SimpleScheduler()
 from typing import Optional
 
 _LOGGER = logging.getLogger(__name__)
@@ -101,18 +136,29 @@ class FileStorage:
         cutoff_time = time.time() - (self.expiry_minutes * 60)
         count = 0
         
+        # Ensure the storage directory exists
+        if not self.storage_dir.exists():
+            self.storage_dir.mkdir(parents=True, exist_ok=True)
+            return 0
+        
+        # Go through all files in the directory
         for file_path in self.storage_dir.iterdir():
             if file_path.is_file():
-                mtime = file_path.stat().st_mtime
-                if mtime < cutoff_time:
-                    try:
+                try:
+                    mtime = file_path.stat().st_mtime
+                    file_age_minutes = (time.time() - mtime) / 60
+                    
+                    # Delete files older than expiry time
+                    if mtime < cutoff_time:
                         os.remove(file_path)
                         count += 1
-                    except Exception as e:
-                        _LOGGER.error(f"Error deleting {file_path}: {e}")
+                        print(f"Deleted old file: {file_path.name} (age: {file_age_minutes:.1f} minutes)")
+                except Exception as e:
+                    _LOGGER.error(f"Error processing {file_path}: {e}")
         
         if count > 0:
             _LOGGER.info(f"Cleaned up {count} old files")
+            print(f"Cleaned up {count} files older than {self.expiry_minutes} minutes")
         
         return count
     
@@ -120,11 +166,20 @@ class FileStorage:
         """Start the cleanup scheduler in a separate thread."""
         def run_scheduler():
             _LOGGER.info("Started file cleanup scheduler")
+            # Run cleanup right away to make sure it works
+            self.cleanup_old_files()
+            
+            # Schedule periodic cleanup (every 1 minute)
             schedule.every(1).minutes.do(self.cleanup_old_files)
             
             while True:
-                schedule.run_pending()
+                try:
+                    schedule.run_pending()
+                except Exception as e:
+                    _LOGGER.error(f"Error in cleanup scheduler: {e}")
                 time.sleep(10)
         
+        # Start the scheduler in a daemon thread so it doesn't block program exit
         thread = threading.Thread(target=run_scheduler, daemon=True)
         thread.start()
+        _LOGGER.info(f"File cleanup scheduler started with {self.expiry_minutes} minute expiry time")

@@ -53,12 +53,14 @@ class PlaceholderStretcher:
             format=audio_format
         )
         
-        # Sort placeholders by start time (just in case)
+        # Sort placeholders by start time
         placeholders_sorted = sorted(
             [Placeholder(**p) for p in placeholders],
             key=lambda x: x.start_time
         )
 
+        print(f"Processing {len(placeholders_sorted)} placeholders")
+        
         # Create a list of audio segments
         segments = []
         last_end = 0
@@ -69,8 +71,10 @@ class PlaceholderStretcher:
             if placeholder.start_time > last_end:
                 segment = input_audio[last_end * 1000:placeholder.start_time * 1000]
                 segments.append(segment)
+                print(f"Added segment from {last_end}s to {placeholder.start_time}s")
 
             if not placeholder.text_value:
+                print(f"Empty placeholder at {placeholder.start_time}s, skipping")
                 continue
 
             # Generate TTS for placeholder
@@ -84,18 +88,35 @@ class PlaceholderStretcher:
                 )
 
                 if tts_audio:
+                    # Calculate placeholder duration and TTS duration
+                    placeholder_duration = placeholder.end_time - placeholder.start_time
+                    tts_duration = len(tts_audio) / 1000  # Convert ms to seconds
+                    
+                    print(f"Placeholder: '{placeholder.text_value}' - Duration: {placeholder_duration:.2f}s, TTS: {tts_duration:.2f}s")
+                    
+                    # Add the TTS audio to segments
                     segments.append(tts_audio)
+                    print(f"Added TTS audio for '{placeholder.text_value}'")
+                    
+                    # Skip the remaining placeholder duration in the original audio
+                    # We've already added the TTS, no need to include the original audio for this section
 
             last_end = placeholder.end_time
 
         # Add the final segment after the last placeholder
         if last_end < len(input_audio) / 1000:
             segments.append(input_audio[last_end * 1000:])
+            print(f"Added final segment from {last_end}s to end")
 
         # Combine all segments
-        final_audio = segments[0]
-        for segment in segments[1:]:
-            final_audio += segment
+        if not segments:
+            print("No segments generated, returning original audio")
+            final_audio = input_audio
+        else:
+            print(f"Combining {len(segments)} segments")
+            final_audio = segments[0]
+            for segment in segments[1:]:
+                final_audio += segment
 
         # Convert to target sample rate and return as WAV
         with io.BytesIO() as wav_io:
@@ -103,4 +124,5 @@ class PlaceholderStretcher:
                 wav_io, 
                 format='wav'
             )
+            print(f"Final audio duration: {len(final_audio)/1000:.2f}s")
             return wav_io.getvalue()
