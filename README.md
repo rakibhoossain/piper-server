@@ -20,7 +20,7 @@ An enhanced Piper text-to-speech server with advanced features including audio p
 
 1. Clone the repository:
 ```sh
-git clone https://github.com/yourusername/piper_server.git
+git clone https://github.com/rakibhoossain/piper_server.git
 cd piper_server
 ```
 
