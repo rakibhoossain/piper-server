@@ -7,8 +7,10 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 from datetime import datetime
+import logging.config
 
 from flask import Flask, request, jsonify, send_file, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 import json
 
 from .placeholder_stretcher import PlaceholderStretcher
@@ -19,7 +21,42 @@ from .download import ensure_voice_exists, find_voice, get_voices
 _LOGGER = logging.getLogger()
 
 
-def main() -> None:
+def configure_logging(debug=False):
+    """Configure logging for the application."""
+    log_level = "DEBUG" if debug else "INFO"
+    logging_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "standard": {
+                "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+            },
+        },
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+                "level": log_level,
+                "formatter": "standard",
+                "stream": "ext://sys.stdout",
+            },
+        },
+        "loggers": {
+            "": {  # root logger
+                "handlers": ["console"],
+                "level": log_level,
+                "propagate": True
+            },
+            "werkzeug": {
+                "level": "WARNING" if not debug else "INFO",
+                "handlers": ["console"],
+                "propagate": False,
+            },
+        },
+    }
+    logging.config.dictConfig(logging_config)
+
+
+def main() -> Flask:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0", help="HTTP server host")
     parser.add_argument("--port", type=int, default=5000, help="HTTP server port")
@@ -83,9 +120,23 @@ def main() -> None:
         default=20,
         help="Minutes after which files are automatically deleted"
     )
+    parser.add_argument(
+        "--base-url",
+        "--base_url",
+        default=os.environ.get("PIPER_BASE_URL", ""),
+        help="Base URL for file access (default: from PIPER_BASE_URL env var)"
+    )
+    parser.add_argument(
+        "--behind-proxy",
+        "--behind_proxy",
+        action="store_true",
+        help="Enable if running behind a proxy like Nginx"
+    )
     args = parser.parse_args()
-    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
-    _LOGGER.debug(args)
+    
+    # Configure proper logging
+    configure_logging(args.debug)
+    _LOGGER.debug(f"Starting with args: {args}")
 
     if not args.download_dir:
         # Download to first data directory by default
@@ -120,14 +171,24 @@ def main() -> None:
     # Create web server
     app = Flask(__name__)
     
-    # Initialize file storage
+    # Configure app for production use
+    if args.behind_proxy:
+        # Fix for running behind reverse proxy
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+        _LOGGER.info("Configured for use behind a proxy")
+    
+    # Initialize file storage with base_url from args or env
     storage_dir = os.path.abspath(args.storage_dir)
+    base_url = args.base_url
+    
     file_storage = FileStorage(
         storage_dir=storage_dir,
         expiry_minutes=args.file_expiry,
-        base_url=""
+        base_url=base_url
     )
     _LOGGER.info(f"File storage initialized at {storage_dir} with {args.file_expiry}min expiry")
+    if base_url:
+        _LOGGER.info(f"Using base URL: {base_url}")
 
     @app.route("/", methods=["GET", "POST"])
     async def app_synthesize() -> bytes:
@@ -223,7 +284,12 @@ def main() -> None:
             if request.args.get('format') == 'json':
                 # Save the processed audio file and get a URL
                 file_id = file_storage.save_file(result_audio)
-                file_url = request.host_url.rstrip('/') + url_for('serve_file', file_id=file_id)
+                
+                # Generate file URL using either the base_url or the request host
+                if args.base_url:
+                    file_url = f"{args.base_url.rstrip('/')}/file/{file_id}"
+                else:
+                    file_url = request.host_url.rstrip('/') + url_for('serve_file', file_id=file_id)
 
                 # Return both the file URL and the raw audio
                 response_data = {
@@ -280,13 +346,17 @@ def main() -> None:
                 "created_at": creation_time,
                 "expires_at": expiry_time,
                 "size_bytes": file_stats.st_size,
-                "file_url": request.host_url.rstrip('/') + url_for('serve_file', file_id=file_id)
+                "file_url": args.base_url.rstrip('/') + f"/file/{file_id}" if args.base_url else request.host_url.rstrip('/') + url_for('serve_file', file_id=file_id)
             })
         except Exception as e:
             _LOGGER.exception(f"Error getting file info for {file_id}")
             return jsonify({"error": str(e)}), 500
 
-    app.run(host=args.host, port=args.port)
+    # Only run the development server if executed directly
+    # For production, use a WSGI server like Gunicorn
+    app.run(host=args.host, port=args.port, debug=args.debug)
+    
+    return app  # Return the app for WSGI servers
 
 if __name__ == "__main__":
     main()
