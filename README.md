@@ -32,7 +32,7 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 3. Install dependencies:
 ```sh
-pip install -r requirements_http.txt
+pip install -r requirements.txt
 pip install schedule  # For automated file cleanup
 ```
 
