@@ -48,7 +48,7 @@ class PlaceholderStretcher:
             bytes: Processed audio data in WAV format
         """
         # Convert input audio to AudioSegment
-        audio_segment = AudioSegment.from_file(
+        input_audio = AudioSegment.from_file(
             io.BytesIO(audio_data), 
             format=audio_format
         )
@@ -58,36 +58,45 @@ class PlaceholderStretcher:
             [Placeholder(**p) for p in placeholders],
             key=lambda x: x.start_time
         )
-        
+
+        # Create a list of audio segments
+        segments = []
+        last_end = 0
+
         # Generate TTS for each placeholder
         for placeholder in placeholders_sorted:
+            # Add the segment before the placeholder
+            if placeholder.start_time > last_end:
+                segment = input_audio[last_end * 1000:placeholder.start_time * 1000]
+                segments.append(segment)
+
+            if not placeholder.text_value:
+                continue
+
             # Generate TTS for placeholder
             with io.BytesIO() as wav_io:
                 with wave.open(wav_io, "wb") as wav_file:
                     self.voice.synthesize(placeholder.text_value, wav_file, **self.synthesize_args)
-                placeholder.audio_data = wav_io.getvalue()
-        
-        # Build the final audio
-        final_audio = AudioSegment.silent(duration=0)
-        last_end = 0
-        
-        for placeholder in placeholders_sorted:
-            # Add audio before this placeholder
-            before_segment = audio_segment[last_end * 1000:placeholder.start_time * 1000]
-            final_audio += before_segment
-            
-            # Add TTS audio
-            tts_audio = AudioSegment.from_file(
-                io.BytesIO(placeholder.audio_data),
-                format='wav'
-            )
-            final_audio += tts_audio
-            
+
+                tts_audio = AudioSegment.from_file(
+                    io.BytesIO(wav_io.getvalue()),
+                    format='wav'
+                )
+
+                if tts_audio:
+                    segments.append(tts_audio)
+
             last_end = placeholder.end_time
-        
-        # Add remaining audio after last placeholder
-        final_audio += audio_segment[last_end * 1000:]
-        
+
+        # Add the final segment after the last placeholder
+        if last_end < len(input_audio) / 1000:
+            segments.append(input_audio[last_end * 1000:])
+
+        # Combine all segments
+        final_audio = segments[0]
+        for segment in segments[1:]:
+            final_audio += segment
+
         # Convert to target sample rate and return as WAV
         with io.BytesIO() as wav_io:
             final_audio.export(

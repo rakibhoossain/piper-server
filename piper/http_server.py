@@ -6,10 +6,11 @@ import wave
 from pathlib import Path
 from typing import Any, Dict
 
-from flask import Flask, request, jsonify, json
+from flask import Flask, request, jsonify
+import json
 
-from piper.placeholder_stretcher import PlaceholderStretcher
-from . import PiperVoice, placeholder_stretcher
+from .placeholder_stretcher import PlaceholderStretcher
+from . import PiperVoice
 from .download import ensure_voice_exists, find_voice, get_voices
 
 _LOGGER = logging.getLogger()
@@ -182,8 +183,9 @@ def main() -> None:
                     except (ValueError, TypeError):
                         return jsonify({"error": f"start_time and end_time must be numbers in placeholder at index {i}"}), 400
                     
-            except json.JSONDecodeError:
-                return jsonify({"error": "Invalid JSON in placeholders"}), 400
+            except json.JSONDecodeError as e:
+                _LOGGER.error("JSON decode error: %s", str(e))
+                return jsonify({"error": f"Invalid JSON in placeholders: {str(e)}"}), 400
 
             # Process placeholders
             result_audio = await stretcher.process_placeholders(
