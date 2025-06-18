@@ -123,17 +123,25 @@ def main() -> None:
 
 
     # Initialize placeholder stretcher
-    stretcher = PlaceholderStretcher(voice)
+    stretcher = PlaceholderStretcher(voice, synthesize_args)
 
     @app.route("/stretch", methods=["POST"])
     async def app_stretch_audio():
-        """Handle audio stretching with placeholders."""
-
+        """Handle audio stretching with placeholders.
+        
+        Expected JSON format for placeholders:
+        [
+            {
+                "start_time": float,  # in seconds
+                "end_time": float,    # in seconds
+                "text_value": str     # text to be converted to speech
+            },
+            ...
+        ]
+        """
         _LOGGER.debug("Request files: %s", request.files)
         _LOGGER.debug("Request form: %s", request.form)
-
-        print(request.files)
-        print(request.form)
+        _LOGGER.debug("Request JSON: %s", request.get_json(silent=True))
 
         if 'audio' not in request.files:
             return jsonify({"error": "No audio file provided"}), 400
@@ -148,7 +156,34 @@ def main() -> None:
             if not placeholders:
                 return jsonify({"error": "No placeholders provided"}), 400
 
-            placeholders = json.loads(placeholders)
+            try:
+                placeholders = json.loads(placeholders)
+
+                print(placeholders)
+                if not isinstance(placeholders, list):
+                    return jsonify({"error": "Placeholders must be a list of objects"}), 400
+                
+                # Validate each placeholder
+                for i, ph in enumerate(placeholders):
+                    if not isinstance(ph, dict):
+                        return jsonify({"error": f"Placeholder at index {i} is not an object"}), 400
+                    
+                    required_fields = ['start_time', 'end_time', 'text_value']
+                    for field in required_fields:
+                        if field not in ph:
+                            return jsonify({"error": f"Missing required field '{field}' in placeholder at index {i}"}), 400
+                    
+                    if not isinstance(ph['text_value'], str):
+                        return jsonify({"error": f"text_value must be a string in placeholder at index {i}"}), 400
+                    
+                    try:
+                        ph['start_time'] = float(ph['start_time'])
+                        ph['end_time'] = float(ph['end_time'])
+                    except (ValueError, TypeError):
+                        return jsonify({"error": f"start_time and end_time must be numbers in placeholder at index {i}"}), 400
+                    
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid JSON in placeholders"}), 400
 
             # Process placeholders
             result_audio = await stretcher.process_placeholders(
