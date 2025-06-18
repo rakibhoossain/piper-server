@@ -6,9 +6,10 @@ import wave
 from pathlib import Path
 from typing import Any, Dict
 
-from flask import Flask, request
+from flask import Flask, request, jsonify, json
 
-from . import PiperVoice
+from piper.placeholder_stretcher import PlaceholderStretcher
+from . import PiperVoice, placeholder_stretcher
 from .download import ensure_voice_exists, find_voice, get_voices
 
 _LOGGER = logging.getLogger()
@@ -103,7 +104,7 @@ def main() -> None:
     app = Flask(__name__)
 
     @app.route("/", methods=["GET", "POST"])
-    def app_synthesize() -> bytes:
+    async def app_synthesize() -> bytes:
         if request.method == "POST":
             text = request.data.decode("utf-8")
         else:
@@ -120,8 +121,53 @@ def main() -> None:
 
             return wav_io.getvalue()
 
-    app.run(host=args.host, port=args.port)
 
+    # Initialize placeholder stretcher
+    stretcher = PlaceholderStretcher(voice)
+
+    @app.route("/stretch", methods=["POST"])
+    async def app_stretch_audio():
+        """Handle audio stretching with placeholders."""
+
+        _LOGGER.debug("Request files: %s", request.files)
+        _LOGGER.debug("Request form: %s", request.form)
+
+        print(request.files)
+        print(request.form)
+
+        if 'audio' not in request.files:
+            return jsonify({"error": "No audio file provided"}), 400
+
+        try:
+            # Get audio file
+            audio_file = request.files['audio']
+            audio_data = audio_file.read()
+
+            # Get placeholders from JSON
+            placeholders = request.form.get('placeholders')
+            if not placeholders:
+                return jsonify({"error": "No placeholders provided"}), 400
+
+            placeholders = json.loads(placeholders)
+
+            # Process placeholders
+            result_audio = await stretcher.process_placeholders(
+                audio_data=audio_data,
+                placeholders=placeholders,
+                audio_format=audio_file.filename.split('.')[-1].lower()
+            )
+
+            # Return the processed audio
+            return result_audio, 200, {
+                'Content-Type': 'audio/wav',
+                'Content-Disposition': 'attachment; filename=processed.wav'
+            }
+
+        except Exception as e:
+            _LOGGER.exception("Error processing placeholders")
+            return jsonify({"error": str(e)}), 500
+
+    app.run(host=args.host, port=args.port)
 
 if __name__ == "__main__":
     main()
