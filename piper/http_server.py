@@ -352,6 +352,130 @@ def main() -> Flask:
             _LOGGER.exception(f"Error getting file info for {file_id}")
             return jsonify({"error": str(e)}), 500
 
+    @app.route("/join", methods=["POST"])
+    async def app_join_audio():
+        """Join multiple audio files and text content in serial.
+        
+        Expected format:
+        - multipart/form-data with:
+          - items[]: Array of JSON objects with:
+            - type: "audio" or "text"
+            - content: For audio, a file reference; for text, the text to synthesize
+        
+        Returns:
+            Combined audio file or JSON with file URL
+        """
+        try:
+            # Get items data
+            items_json = request.form.get('items')
+            if not items_json:
+                return jsonify({"error": "No items provided"}), 400
+            
+            try:
+                items = json.loads(items_json)
+                if not isinstance(items, list):
+                    return jsonify({"error": "Items must be a list"}), 400
+                
+                # Validate items
+                for i, item in enumerate(items):
+                    if not isinstance(item, dict):
+                        return jsonify({"error": f"Item at index {i} is not an object"}), 400
+                    
+                    if 'type' not in item:
+                        return jsonify({"error": f"Missing 'type' in item at index {i}"}), 400
+                    
+                    if item['type'] not in ['audio', 'text']:
+                        return jsonify({"error": f"Invalid type '{item['type']}' in item at index {i}"}), 400
+                    
+                    if 'content' not in item:
+                        return jsonify({"error": f"Missing 'content' in item at index {i}"}), 400
+                    
+            except json.JSONDecodeError as e:
+                _LOGGER.error("JSON decode error: %s", str(e))
+                return jsonify({"error": f"Invalid JSON in items: {str(e)}"}), 400
+
+            
+            # Process each item and collect audio segments
+            from pydub import AudioSegment
+            segments = []
+            
+            for item in items:
+                if item['type'] == 'audio':
+                    # Get audio file by reference name
+                    file_key = item['content']
+                    if file_key not in request.files:
+                        return jsonify({"error": f"Audio file '{file_key}' not found in request"}), 400
+                    
+                    audio_file = request.files[file_key]
+                    audio_format = audio_file.filename.split('.')[-1].lower()
+                    
+                    # Convert to AudioSegment
+                    segment = AudioSegment.from_file(
+                        io.BytesIO(audio_file.read()),
+                        format=audio_format
+                    )
+                    segments.append(segment)
+                    
+                elif item['type'] == 'text':
+                    # Generate TTS for text
+                    text = item['content']
+                    if not text:
+                        continue  # Skip empty text
+                    
+                    with io.BytesIO() as wav_io:
+                        with wave.open(wav_io, "wb") as wav_file:
+                            voice.synthesize(text, wav_file, **synthesize_args)
+                        
+                        tts_segment = AudioSegment.from_file(
+                            io.BytesIO(wav_io.getvalue()),
+                            format='wav'
+                        )
+                        segments.append(tts_segment)
+        
+            # Combine all segments
+            if not segments:
+                return jsonify({"error": "No valid audio segments to join"}), 400
+            
+            final_audio = segments[0]
+            for segment in segments[1:]:
+                final_audio += segment
+            
+            # Convert to WAV and return
+            with io.BytesIO() as wav_io:
+                final_audio.export(wav_io, format='wav')
+                result_audio = wav_io.getvalue()
+            
+            # Check if the client wants JSON response or direct file download
+            if request.args.get('format') == 'json':
+                # Save the processed audio file and get a URL
+                file_id = file_storage.save_file(result_audio)
+                
+                # Generate file URL
+                if args.base_url:
+                    file_url = f"{args.base_url.rstrip('/')}/file/{file_id}"
+                else:
+                    file_url = request.host_url.rstrip('/') + url_for('serve_file', file_id=file_id)
+                
+                # Return file information
+                response_data = {
+                    "file_id": file_id,
+                    "file_url": file_url,
+                    "expires_at": datetime.now().timestamp() + (args.file_expiry * 60),
+                    "duration_seconds": len(final_audio) / 1000
+                }
+                
+                return jsonify(response_data)
+            else:
+                # Return the processed audio directly
+                return result_audio, 200, {
+                    'Content-Type': 'audio/wav',
+                    'Content-Disposition': 'attachment; filename=joined.wav'
+                }
+            
+        except Exception as e:
+            _LOGGER.exception("Error joining audio and text")
+            return jsonify({"error": str(e)}), 500
+
     # Only run the development server if executed directly
     # For production, use a WSGI server like Gunicorn
     app.run(host=args.host, port=args.port, debug=args.debug)
