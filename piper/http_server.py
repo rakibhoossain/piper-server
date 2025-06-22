@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Dict
 from datetime import datetime
 import logging.config
+import tempfile
+import hashlib
 
 from flask import Flask, request, jsonify, send_file, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -475,6 +477,194 @@ def main() -> Flask:
         except Exception as e:
             _LOGGER.exception("Error joining audio and text")
             return jsonify({"error": str(e)}), 500
+
+    @app.route("/whisper", methods=["POST"])
+    async def app_whisper_speech():
+        """Generate speech using WhisperSpeech model.
+        
+        Expected format:
+        - multipart/form-data with:
+          - text: Text to synthesize
+          - voice: (optional) Voice reference audio file
+          - model: (optional) WhisperSpeech model to use
+        
+        Returns:
+            Generated audio file or JSON with file URL
+        """
+        try:
+            # Check if WhisperSpeech is installed
+            try:
+                import whisperspeech
+                from whisperspeech.pipeline import Pipeline
+            except ImportError:
+                _LOGGER.error("WhisperSpeech not installed. Install with: pip install whisperspeech")
+                return jsonify({"error": "WhisperSpeech not installed on the server"}), 500
+
+            # Get text to synthesize
+            text = request.form.get('text')
+            if not text:
+                return jsonify({"error": "No text provided"}), 400
+            
+            # Get model name (default to english_v1)
+            model_name = request.form.get('model', 'english_v1')
+            
+            # Initialize pipeline
+            _LOGGER.info(f"Initializing WhisperSpeech pipeline with model {model_name}")
+            pipeline = Pipeline(model_name)
+            
+            # Check if voice reference is provided
+            voice_audio = None
+            if 'voice' in request.files:
+                voice_file = request.files['voice']
+                voice_audio = voice_file.read()
+                _LOGGER.info(f"Using custom voice reference from uploaded file")
+            
+            # Generate speech
+            _LOGGER.info(f"Generating speech for text: {text[:50]}...")
+            
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_path = temp_file.name
+                
+                if voice_audio:
+                    # Save voice reference to temp file
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as voice_temp:
+                        voice_temp.write(voice_audio)
+                        voice_temp_path = voice_temp.name
+                    
+                    # Generate with voice cloning
+                    pipeline.generate_to_file(text, temp_path, voice_temp_path)
+                    # Clean up voice temp file
+                    os.unlink(voice_temp_path)
+                else:
+                    # Generate with default voice
+                    pipeline.generate_to_file(text, temp_path)
+                
+                # Read the generated audio
+                with open(temp_path, 'rb') as f:
+                    result_audio = f.read()
+                
+                # Clean up temp file
+                os.unlink(temp_path)
+            
+            # Check if the client wants JSON response or direct file download
+            if request.args.get('format') == 'json':
+                # Save the processed audio file and get a URL
+                file_id = file_storage.save_file(result_audio)
+                
+                # Generate file URL
+                if args.base_url:
+                    file_url = f"{args.base_url.rstrip('/')}/file/{file_id}"
+                else:
+                    file_url = request.host_url.rstrip('/') + url_for('serve_file', file_id=file_id)
+                
+                # Return file information
+                response_data = {
+                    "file_id": file_id,
+                    "file_url": file_url,
+                    "expires_at": datetime.now().timestamp() + (args.file_expiry * 60),
+                    "text": text
+                }
+                
+                return jsonify(response_data)
+            else:
+                # Return the processed audio directly
+                return result_audio, 200, {
+                    'Content-Type': 'audio/wav',
+                    'Content-Disposition': 'attachment; filename=whisper_speech.wav'
+                }
+                
+        except Exception as e:
+            _LOGGER.exception("Error generating speech with WhisperSpeech")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/static/<path:filename>")
+    def serve_static(filename):
+        """Serve static files."""
+        static_dir = os.path.join(os.path.dirname(__file__), "static")
+        return send_file(os.path.join(static_dir, filename))
+
+    @app.route("/whisper-ui")
+    def whisper_ui():
+        """Serve the WhisperSpeech UI page."""
+        html_path = os.path.join(os.path.dirname(__file__), "static", "whisper.html")
+        return send_file(html_path)
+
+    @app.route("/transcribe", methods=["POST"])
+    async def app_transcribe_audio():
+        """Transcribe audio using OpenAI's Whisper model."""
+        try:
+            # Check if Whisper is installed
+            try:
+                import whisper
+            except ImportError:
+                installation_msg = "OpenAI Whisper not installed. Install with: pip install openai-whisper"
+                _LOGGER.error(installation_msg)
+                return jsonify({"error": installation_msg, "install_command": "pip install openai-whisper"}), 500
+
+            # Check if audio file is provided
+            if 'audio' not in request.files:
+                return jsonify({"error": "No audio file provided"}), 400
+            
+            audio_file = request.files['audio']
+            if not audio_file.filename:
+                return jsonify({"error": "No audio file selected"}), 400
+            
+            # Get model name (default to base)
+            model_name = request.form.get('model', 'base')
+            valid_models = ['tiny', 'base', 'small', 'medium', 'large']
+            
+            if model_name not in valid_models:
+                return jsonify({"error": f"Invalid model. Choose from: {', '.join(valid_models)}"}), 400
+            
+            # Get language (optional)
+            language = request.form.get('language')
+            
+            # Save audio to temporary file
+            with tempfile.NamedTemporaryFile(suffix='.' + audio_file.filename.split('.')[-1], delete=False) as temp_file:
+                audio_file.save(temp_file.name)
+                temp_path = temp_file.name
+                
+                try:
+                    # Load model
+                    _LOGGER.info(f"Loading Whisper {model_name} model...")
+                    
+                    # Set custom download directory to avoid permission issues
+                    download_root = os.path.join(os.path.dirname(__file__), "models", "whisper")
+                    os.makedirs(download_root, exist_ok=True)
+                    
+                    model = whisper.load_model(model_name, download_root=download_root)
+                    
+                    # Transcribe audio
+                    _LOGGER.info(f"Transcribing audio file: {audio_file.filename}")
+                    
+                    transcribe_options = {}
+                    if language:
+                        transcribe_options["language"] = language
+                    
+                    result = model.transcribe(temp_path, **transcribe_options)
+                    
+                    # Return transcription result
+                    response_data = {
+                        "text": result["text"],
+                        "segments": result["segments"],
+                        "language": result.get("language", ""),
+                    }
+                    
+                    return jsonify(response_data)
+                    
+                finally:
+                    # Clean up temp file
+                    os.unlink(temp_path)
+                    
+        except Exception as e:
+            _LOGGER.exception("Error transcribing audio with Whisper")
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/transcribe-ui")
+    def transcribe_ui():
+        """Serve the Whisper transcription UI page."""
+        html_path = os.path.join(os.path.dirname(__file__), "static", "transcribe.html")
+        return send_file(html_path)
 
     # Only run the development server if executed directly
     # For production, use a WSGI server like Gunicorn

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhisperSpeech Synthesis</title>
+    <link rel="stylesheet" href="static/whisper.css">
+</head>
+<body>
+    <div class="container">
+        <h1>WhisperSpeech Text-to-Speech</h1>
+        
+        <div class="card">
+            <h2>Generate Speech</h2>
+            <div class="form-group">
+                <label for="text-input">Text to synthesize:</label>
+                <textarea id="text-input" rows="5" placeholder="Enter text to convert to speech..."></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="model-select">Model:</label>
+                <select id="model-select">
+                    <option value="english_v1" selected>English v1</option>
+                    <option value="english_v2">English v2</option>
+                    <option value="multilingual_v1">Multilingual v1</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="voice-file">Voice reference (optional):</label>
+                <input type="file" id="voice-file" accept="audio/*">
+                <p class="help-text">Upload a short audio sample to clone the voice</p>
+            </div>
+            
+            <div class="button-group">
+                <button id="generate-btn" class="primary-btn">Generate Speech</button>
+                <button id="clear-btn" class="secondary-btn">Clear</button>
+            </div>
+        </div>
+        
+        <div class="card result-card" id="result-card" style="display: none;">
+            <h2>Generated Speech</h2>
+            <div class="audio-player">
+                <audio id="audio-player" controls></audio>
+            </div>
+            
+            <div class="transcript">
+                <h3>Transcript</h3>
+                <div id="transcript-text"></div>
+            </div>
+            
+            <div class="button-group">
+                <button id="download-btn" class="primary-btn">Download Audio</button>
+                <button id="copy-btn" class="secondary-btn">Copy Text</button>
+            </div>
+        </div>
+        
+        <div id="loading" class="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Generating speech...</p>
+        </div>
+    </div>
+    
+    <script src="static/whisper.js"></script>
+</body>
+</html>

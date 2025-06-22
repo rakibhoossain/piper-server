@@ -116,6 +116,87 @@ Get file information:
 GET http://localhost:5000/file/{file_id}/info
 ```
 
+## WhisperSpeech Integration
+
+The server now includes integration with WhisperSpeech for high-quality text-to-speech synthesis:
+
+### WhisperSpeech API
+
+Generate speech using WhisperSpeech models:
+
+```sh
+# Basic usage
+curl -X POST \
+  -F "text=This is a test of WhisperSpeech synthesis." \
+  -o whisper_output.wav \
+  'http://localhost:5000/whisper'
+
+# With voice cloning
+curl -X POST \
+  -F "text=This is a test of WhisperSpeech synthesis." \
+  -F "voice=@voice_sample.wav" \
+  -F "model=english_v2" \
+  'http://localhost:5000/whisper?format=json'
+```
+
+### WhisperSpeech UI
+
+A web interface is available at:
+```
+http://localhost:5000/whisper-ui
+```
+
+This interface allows you to:
+- Enter text to synthesize
+- Select WhisperSpeech models
+- Upload voice samples for voice cloning
+- Preview and download generated audio
+
+## OpenAI Whisper Integration
+
+The server includes integration with OpenAI's Whisper model for high-quality speech-to-text transcription.
+
+### Installation
+
+Install OpenAI Whisper:
+
+```sh
+pip install openai-whisper
+```
+
+### Whisper API
+
+Transcribe audio using Whisper models:
+
+```sh
+# Basic usage
+curl -X POST \
+  -F "audio=@recording.mp3" \
+  -F "model=base" \
+  'http://localhost:5000/transcribe'
+
+# With language specification
+curl -X POST \
+  -F "audio=@recording.mp3" \
+  -F "model=medium" \
+  -F "language=en" \
+  'http://localhost:5000/transcribe'
+```
+
+### Whisper UI
+
+A web interface for audio transcription is available at:
+```
+http://localhost:5000/transcribe-ui
+```
+
+This interface allows you to:
+- Upload audio files for transcription
+- Select Whisper model size (tiny, base, small, medium, large)
+- Specify language (optional)
+- View full transcript and segmented results
+- Copy and download transcription results
+
 ## How It Works
 
 ### Placeholder Processing

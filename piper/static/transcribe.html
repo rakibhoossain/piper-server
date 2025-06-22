@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whisper Speech-to-Text</title>
+    <link rel="stylesheet" href="static/transcribe.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Whisper Speech-to-Text</h1>
+        
+        <div class="card">
+            <h2>Transcribe Audio</h2>
+            <div class="form-group">
+                <label for="audio-file">Audio file to transcribe:</label>
+                <input type="file" id="audio-file" accept="audio/*" required>
+                <p class="help-text">Upload an audio file (WAV, MP3, etc.)</p>
+            </div>
+            
+            <div class="form-group">
+                <label for="model-select">Model:</label>
+                <select id="model-select">
+                    <option value="tiny">Tiny (fastest, least accurate)</option>
+                    <option value="base" selected>Base</option>
+                    <option value="small">Small</option>
+                    <option value="medium">Medium</option>
+                    <option value="large">Large (slowest, most accurate)</option>
+                </select>
+                <p class="help-text">Larger models are more accurate but slower</p>
+            </div>
+            
+            <div class="form-group">
+                <label for="language-input">Language (optional):</label>
+                <input type="text" id="language-input" placeholder="e.g., en, fr, de">
+                <p class="help-text">ISO language code (leave empty for auto-detection)</p>
+            </div>
+            
+            <div class="audio-preview">
+                <h3>Audio Preview</h3>
+                <audio id="audio-preview" controls></audio>
+            </div>
+            
+            <div class="button-group">
+                <button id="transcribe-btn" class="primary-btn">Transcribe Audio</button>
+                <button id="clear-btn" class="secondary-btn">Clear</button>
+            </div>
+        </div>
+        
+        <div class="card result-card" id="result-card" style="display: none;">
+            <h2>Transcription Result</h2>
+            
+            <div class="transcript">
+                <h3>Full Transcript</h3>
+                <div id="transcript-text" class="transcript-content"></div>
+            </div>
+            
+            <div class="segments">
+                <h3>Segments</h3>
+                <div id="segments-container"></div>
+            </div>
+            
+            <div class="button-group">
+                <button id="copy-btn" class="primary-btn">Copy Text</button>
+                <button id="download-btn" class="secondary-btn">Download Transcript</button>
+            </div>
+        </div>
+        
+        <div id="loading" class="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Transcribing audio...</p>
+            <p class="loading-info">This may take a while depending on the model size and audio length</p>
+        </div>
+    </div>
+    
+    <script src="static/transcribe.js"></script>
+</body>
+</html>
