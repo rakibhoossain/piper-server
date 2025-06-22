@@ -1,7 +1,5 @@
 piper-phonemize-cross~=1.2.1
 onnxruntime>=1.11.0,<2
-
-numpy~=2.3.0
 Flask[async]~=3.1.1
 setuptools~=80.9.0
 certifi~=2025.6.15
@@ -10,3 +8,4 @@ soundfile~=0.12.1
 schedule~=1.2.2
 Werkzeug~=3.1.3
 openai-whisper
+numpy~=2.2.6

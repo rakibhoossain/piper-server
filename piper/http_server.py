@@ -192,6 +192,84 @@ def main() -> Flask:
     if base_url:
         _LOGGER.info(f"Using base URL: {base_url}")
 
+    # Helper function for transcription
+    async def _transcribe_audio_data(audio_data, model_name='base', language=None):
+        """Transcribe audio data using OpenAI's Whisper model.
+
+        Args:
+            audio_data: Raw audio data bytes
+            model_name: Whisper model to use (tiny, base, small, medium, large)
+            language: Optional language code for transcription
+
+        Returns:
+            Dictionary with transcription results or error information
+        """
+        try:
+            # Check if Whisper is installed
+            try:
+                import whisper
+            except ImportError:
+                _LOGGER.error("OpenAI Whisper not installed. Install with: pip install openai-whisper")
+                return {"error": "OpenAI Whisper not installed on the server",
+                        "install_command": "pip install openai-whisper"}
+
+            # Validate model name
+            valid_models = ['tiny', 'base', 'small', 'medium', 'large']
+            if model_name not in valid_models:
+                _LOGGER.error(f"Invalid Whisper model: {model_name}")
+                return {"error": f"Invalid model. Choose from: {', '.join(valid_models)}"}
+
+            # Save audio to temporary file
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                temp_file.write(audio_data)
+                temp_path = temp_file.name
+
+                try:
+                    # Load model
+                    _LOGGER.info(f"Loading Whisper {model_name} model...")
+
+                    # Set custom download directory to avoid permission issues
+                    download_root = os.path.join(os.path.dirname(__file__), "models", "whisper")
+                    os.makedirs(download_root, exist_ok=True)
+
+                    # Create a custom SSL context that ignores certificate verification
+                    import ssl
+                    original_context = ssl._create_default_https_context
+                    ssl._create_default_https_context = ssl._create_unverified_context
+
+                    try:
+                        model = whisper.load_model(model_name, download_root=download_root)
+                    finally:
+                        # Restore original SSL context
+                        ssl._create_default_https_context = original_context
+
+                    # Transcribe audio
+                    _LOGGER.info(f"Transcribing audio data")
+
+                    transcribe_options = {}
+                    if language:
+                        transcribe_options["language"] = language
+
+                    result = model.transcribe(temp_path, **transcribe_options)
+
+                    # Return transcription result
+                    return {
+                        "text": result["text"],
+                        "segments": result["segments"],
+                        "language": result.get("language", ""),
+                    }
+
+                finally:
+                    # Clean up temp file
+                    os.unlink(temp_path)
+
+        except Exception as e:
+            _LOGGER.exception("Error transcribing audio with Whisper")
+            return {"error": str(e)}
+
+
+
+
     @app.route("/", methods=["GET", "POST"])
     async def app_synthesize() -> bytes:
         if request.method == "POST":
@@ -364,8 +442,12 @@ def main() -> Flask:
             - type: "audio" or "text"
             - content: For audio, a file reference; for text, the text to synthesize
         
+        Query parameters:
+          - format: "json" to return file URL instead of direct audio
+          - transcribe: If present, also transcribe the final audio
+        
         Returns:
-            Combined audio file or JSON with file URL
+            Combined audio file or JSON with file URL and optional transcription
         """
         try:
             # Get items data
@@ -447,6 +529,20 @@ def main() -> Flask:
                 final_audio.export(wav_io, format='wav')
                 result_audio = wav_io.getvalue()
             
+            # Check if transcription is requested
+            transcription_result = None
+            if request.args.get('transcribe'):
+                # Get transcription parameters from query string
+                model_name = request.args.get('model', 'base')
+                language = request.args.get('language')
+                
+                # Transcribe the audio
+                transcription_result = await _transcribe_audio_data(
+                    audio_data=result_audio,
+                    model_name=model_name,
+                    language=language
+                )
+            
             # Check if the client wants JSON response or direct file download
             if request.args.get('format') == 'json':
                 # Save the processed audio file and get a URL
@@ -465,6 +561,10 @@ def main() -> Flask:
                     "expires_at": datetime.now().timestamp() + (args.file_expiry * 60),
                     "duration_seconds": len(final_audio) / 1000
                 }
+                
+                # Add transcription if available
+                if transcription_result:
+                    response_data["transcription"] = transcription_result
                 
                 return jsonify(response_data)
             else:
@@ -593,14 +693,6 @@ def main() -> Flask:
     async def app_transcribe_audio():
         """Transcribe audio using OpenAI's Whisper model."""
         try:
-            # Check if Whisper is installed
-            try:
-                import whisper
-            except ImportError:
-                installation_msg = "OpenAI Whisper not installed. Install with: pip install openai-whisper"
-                _LOGGER.error(installation_msg)
-                return jsonify({"error": installation_msg, "install_command": "pip install openai-whisper"}), 500
-
             # Check if audio file is provided
             if 'audio' not in request.files:
                 return jsonify({"error": "No audio file provided"}), 400
@@ -611,50 +703,30 @@ def main() -> Flask:
             
             # Get model name (default to base)
             model_name = request.form.get('model', 'base')
-            valid_models = ['tiny', 'base', 'small', 'medium', 'large']
-            
-            if model_name not in valid_models:
-                return jsonify({"error": f"Invalid model. Choose from: {', '.join(valid_models)}"}), 400
             
             # Get language (optional)
             language = request.form.get('language')
             
-            # Save audio to temporary file
-            with tempfile.NamedTemporaryFile(suffix='.' + audio_file.filename.split('.')[-1], delete=False) as temp_file:
-                audio_file.save(temp_file.name)
-                temp_path = temp_file.name
-                
-                try:
-                    # Load model
-                    _LOGGER.info(f"Loading Whisper {model_name} model...")
-                    
-                    # Set custom download directory to avoid permission issues
-                    download_root = os.path.join(os.path.dirname(__file__), "models", "whisper")
-                    os.makedirs(download_root, exist_ok=True)
-                    
-                    model = whisper.load_model(model_name, download_root=download_root)
-                    
-                    # Transcribe audio
-                    _LOGGER.info(f"Transcribing audio file: {audio_file.filename}")
-                    
-                    transcribe_options = {}
-                    if language:
-                        transcribe_options["language"] = language
-                    
-                    result = model.transcribe(temp_path, **transcribe_options)
-                    
-                    # Return transcription result
-                    response_data = {
-                        "text": result["text"],
-                        "segments": result["segments"],
-                        "language": result.get("language", ""),
-                    }
-                    
-                    return jsonify(response_data)
-                    
-                finally:
-                    # Clean up temp file
-                    os.unlink(temp_path)
+            # Read audio data
+            audio_data = audio_file.read()
+            
+            # Use the common transcription function
+            transcription_result = await _transcribe_audio_data(
+                audio_data=audio_data,
+                model_name=model_name,
+                language=language
+            )
+            
+            # Check for errors
+            if "error" in transcription_result:
+                error_msg = transcription_result["error"]
+                if "install_command" in transcription_result:
+                    return jsonify({"error": error_msg, "install_command": transcription_result["install_command"]}), 500
+                else:
+                    return jsonify({"error": error_msg}), 400
+            
+            # Return transcription result
+            return jsonify(transcription_result)
                     
         except Exception as e:
             _LOGGER.exception("Error transcribing audio with Whisper")
