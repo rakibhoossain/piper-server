@@ -468,7 +468,7 @@ def main() -> Flask:
                     if 'type' not in item:
                         return jsonify({"error": f"Missing 'type' in item at index {i}"}), 400
                     
-                    if item['type'] not in ['audio', 'text']:
+                    if item['type'] not in ['audio', 'text', 'audio_url']:
                         return jsonify({"error": f"Invalid type '{item['type']}' in item at index {i}"}), 400
                     
                     if 'content' not in item:
@@ -481,6 +481,7 @@ def main() -> Flask:
             
             # Process each item and collect audio segments
             from pydub import AudioSegment
+            import requests
             segments = []
             
             for item in items:
@@ -499,6 +500,44 @@ def main() -> Flask:
                         format=audio_format
                     )
                     segments.append(segment)
+                    
+                elif item['type'] == 'audio_url':
+                    # Download audio from URL
+                    audio_url = item['content']
+                    if not audio_url:
+                        return jsonify({"error": f"Empty URL provided for audio_url item"}), 400
+                    
+                    try:
+                        _LOGGER.info(f"Downloading audio from URL: {audio_url}")
+                        
+                        # Use requests with verify=False to ignore SSL certificate verification
+                        response = requests.get(audio_url, verify=False, timeout=30)
+                        response.raise_for_status()  # Raise exception for 4XX/5XX responses
+                        
+                        # Determine format from URL or content-type
+                        content_type = response.headers.get('Content-Type', '')
+                        if 'audio/mpeg' in content_type or audio_url.lower().endswith('.mp3'):
+                            audio_format = 'mp3'
+                        elif 'audio/wav' in content_type or audio_url.lower().endswith('.wav'):
+                            audio_format = 'wav'
+                        elif 'audio/ogg' in content_type or audio_url.lower().endswith('.ogg'):
+                            audio_format = 'ogg'
+                        else:
+                            # Default to mp3 if we can't determine
+                            audio_format = 'mp3'
+                            _LOGGER.warning(f"Could not determine audio format from URL, defaulting to {audio_format}")
+                        
+                        # Convert to AudioSegment
+                        segment = AudioSegment.from_file(
+                            io.BytesIO(response.content),
+                            format=audio_format
+                        )
+                        segments.append(segment)
+                        _LOGGER.info(f"Successfully downloaded and processed audio from URL: {audio_url}")
+                        
+                    except Exception as e:
+                        _LOGGER.exception(f"Error downloading audio from URL: {audio_url}")
+                        return jsonify({"error": f"Failed to download audio from URL: {str(e)}"}), 400
                     
                 elif item['type'] == 'text':
                     # Generate TTS for text
